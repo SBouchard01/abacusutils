@@ -11,6 +11,7 @@ import gc
 import glob
 import itertools
 import multiprocessing
+from multiprocessing import get_context
 import os
 from itertools import repeat
 from pathlib import Path
@@ -1159,11 +1160,8 @@ def main(
     )
     
     logger.info(f"Starting to process {numslabs} slabs with {config['prepare_sim']['Nparallel_load']} parallel processes.")
-
-    p = multiprocessing.Pool(config['prepare_sim']['Nparallel_load'])
-    p.starmap(
-        prepare_slab,
-        zip(
+    
+    zip_args = zip(
             range(numslabs),
             repeat(savedir),
             repeat(simdir),
@@ -1181,10 +1179,21 @@ def main(
             repeat(halo_lc),
             repeat(nthread),
             repeat(overwrite),
-        ),
-    )
-    p.close()
-    p.join()
+        )
+
+    # p = multiprocessing.Pool(config['prepare_sim']['Nparallel_load'])
+    # p.starmap(prepare_slab, zip_args)
+    # p.close()
+    # p.join()
+    
+    init_setup_args = (logging.INFO, path2log, 'a',) # Pass the logger setup arguments to the pool initializer
+
+    # Use a context manager to ensure the pool closes 
+    with get_context("spawn").Pool(config['prepare_sim']['Nparallel_load'], 
+                                   initializer=setup_logger, 
+                                   initargs=init_setup_args, 
+                                   maxtasksperchild=1) as p:
+        p.starmap(prepare_slab, zip_args)
 
     # print("done, took time ", time.time() - start)
 
