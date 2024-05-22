@@ -15,6 +15,7 @@ import os
 from itertools import repeat
 from pathlib import Path
 import time
+import sys
 import h5py
 import numba
 import numpy as np
@@ -32,6 +33,58 @@ from ..analysis.tsc import tsc_parallel
 DEFAULTS = {}
 DEFAULTS['path2config'] = 'config/abacus_hod.yaml'
 
+# Different setup_logger function adapted for multiprocessing
+import logging
+from .utils import mkdir, exception_handler
+def setup_logger(level=logging.INFO, filename=None, filemode='w', capture_warnings=True, stream=sys.stdout, **kwargs):
+    """
+    Set up the logger for the prepare_sim function
+    
+    Parameters
+    ----------
+    level : string, int, default=logging.INFO
+        The logging level
+    
+    filename : string, default=None
+        The name of the file to log to if not None.
+    
+    filemode : string, default='w'
+        The mode to open the file in. Only used if filename is not None.
+    
+    capture_warnings : bool, default=True
+        Whether to capture warnings in the log.
+        
+    stream : _io.TextIOWrapper, default=sys.stdout
+        Where to stream the logs. (Cannot be changed in multiprocessing because of pickling issues)
+    
+    kwargs : dict
+        Other arguments for :func:`logging.basicConfig`.
+        
+    """
+    if isinstance(level, str):
+        level = {
+            'info': logging.INFO, 
+            'debug': logging.DEBUG, 
+            'warning': logging.WARNING
+        }[level.lower()]
+    for hd in logging.root.handlers:
+        logging.root.removeHandler(hd)
+        
+    # Create the logger formatter, that displays [Process name] time name levelname message
+    formatter = logging.Formatter(fmt='[%(processName)11s] %(asctime)s %(name)-25s %(levelname)-8s %(message)s',
+                                  datefmt='%m-%d %H:%M ')
+    
+    # Configure the prepare_sim logger with the formatter
+    if filename is not None:
+        mkdir(os.path.dirname(filename))
+        handler = logging.FileHandler(filename, mode=filemode) # Uncomment this line to log to a file
+    else:
+        handler = logging.StreamHandler(stream=stream)
+    
+    handler.setFormatter(formatter) # Use the formatter we defined earlier
+    logging.basicConfig(level=level, handlers=[handler], **kwargs)
+    logging.captureWarnings(capture_warnings)
+    sys.excepthook = exception_handler
 
 # https://arxiv.org/pdf/2001.06018.pdf Figure 13 shows redshift evolution of LRG HOD
 # standard power law satellites
@@ -153,6 +206,9 @@ def is_in_cube(x_pos, y_pos, z_pos, verts):
 
 
 def gen_rand(N, chi_min, chi_max, fac, Lbox, offset, origins):
+    # Setup a logger
+    logger = logging.getLogger('prepare_sim')
+    
     # number of randoms to generate
     N_rands = fac * N
 
@@ -215,7 +271,7 @@ def gen_rand(N, chi_min, chi_max, fac, Lbox, offset, origins):
         mask = mask0 | mask1 | mask2
     else:
         mask = mask0
-    print('masked randoms = ', np.sum(mask) * 100.0 / len(mask))
+    logger.info(f"masked randoms = {np.sum(mask)*100./len(mask)}")
 
     rands_pos = np.vstack((x_cart[mask], y_cart[mask], z_cart[mask])).T
     rands_chis = rands_chis[mask]
@@ -275,6 +331,9 @@ def do_Menv_from_tree(
     """Calculate a local mass environment by taking the difference in
     total neighbor halo mass at two apertures
     """
+    
+    # Setup a logger
+    logger = logging.getLogger('prepare_sim')
 
     if halo_lc:
         querypos = allpos
@@ -289,7 +348,7 @@ def do_Menv_from_tree(
     mmask = allmasses > mcut
     pos_cut = querypos[mmask]
 
-    print('Building and querying trees for mass env calculation')
+    logger.info("Building and querying trees for mass env calculation")
     querypos_tree = cKDTree(querypos, boxsize=treebox)
     if isinstance(r_inner, (list, tuple, np.ndarray)):
         r_inner = np.array(r_inner)[mmask]
@@ -308,7 +367,7 @@ def do_Menv_from_tree(
     del allinds_outer
     gc.collect()
 
-    print('starting Menv')
+    logger.info("starting Menv")
     numba.set_num_threads(nthread)
 
     Menv = np.zeros(len(allmasses))
@@ -337,6 +396,11 @@ def prepare_slab(
     mcut=1e11,
     rad_outer=10,
 ):
+    # Setup a logger
+    logger = logging.getLogger('prepare_sim')
+    # Change process name for easier logger reading
+    multiprocessing.current_process().name = f'Slab {i}'
+    
     outfilename_halos = (
         savedir
         + '/halos_xcom_'
@@ -353,7 +417,10 @@ def prepare_slab(
         + str(newseed)
         + '_abacushod_oldfenv'
     )
-    print('processing slab ', i)
+    
+    logger.info(f"processing slab {i} on process {os.getpid()}, with {nthread} threads")
+    start = time.time()
+    
     if MT:
         outfilename_halos += '_MT'
         outfilename_particles += '_MT'
@@ -370,11 +437,11 @@ def prepare_slab(
         and (os.path.exists(outfilename_halos))
         and (os.path.exists(outfilename_particles))
     ):
-        print('files exists, skipping ', i)
+        logger.info(f"files exists, skipping slab {i}")
         return 0
 
     # load the halo catalog slab
-    print('loading halo catalog ')
+    logger.info("loading halo catalog")
     if halo_lc:
         slabname = (
             simdir
@@ -462,7 +529,7 @@ def prepare_slab(
     # creating a mask of which halos to keep, which halos to drop
     p_halos = subsample_halos(halos['N'] * Mpart, MT)
     mask_halos = np.random.random(len(halos)) < p_halos
-    print('total number of halos, ', len(halos), 'keeping ', np.sum(mask_halos))
+    logger.info(f"total number of halos, {len(halos)}, keeping {np.sum(mask_halos)}")
 
     halos['mask_subsample'] = mask_halos
     halos['multi_halos'] = 1.0 / p_halos
@@ -596,7 +663,7 @@ def prepare_slab(
         halos['fenv_rank'] = calc_fenv_opt(Menv, mbins, allmasses)
 
         # compute delta concentration
-        print('computing c rank')
+        logger.info("computing c rank")
         halos_c = halos['r98_L2com'] / halos['r25_L2com']
         deltac_rank = np.zeros(len(halos))
         for ibin in range(nbins):
@@ -664,7 +731,7 @@ def prepare_slab(
         fenvh_parts = np.full(len_old, -1.0)
         shearh_parts = np.full(len_old, -1.0)
 
-        print('compiling particle subsamples')
+        logger.info("compiling particle subsamples")
         start_tracker = 0
         for j in np.arange(len(halos)):
             if j % 10000 == 0:
@@ -838,7 +905,7 @@ def prepare_slab(
     )  # attaching random numbers
 
     # output halo file
-    print('outputting new halo file ')
+    logger.info("outputting new halo file ")
     # output_dir = savedir+'/halos_xcom_'+str(i)+'_seed'+str(newseed)+'_abacushodMT_new.h5'
     if os.path.exists(outfilename_halos):
         os.remove(outfilename_halos)
@@ -848,15 +915,10 @@ def prepare_slab(
 
     # output the new particle file
     if z_type == 'primary' or z_type == 'lightcone':
-        print('adding rank fields to particle data ')
+        logger.info("adding rank fields to particle data ")
         mask_parts = mask_parts.astype(bool)
         parts = parts[mask_parts]
-        print(
-            'pre process particle number ',
-            len_old,
-            ' post process particle number ',
-            len(parts),
-        )
+        logger.info(f"pre process particle number: {len_old}, post process particle number: {len(parts)}")
         if want_ranks:
             parts['ranks'] = ranks_parts[mask_parts]
             parts['ranksv'] = ranksv_parts[mask_parts]
@@ -873,12 +935,9 @@ def prepare_slab(
         parts['halo_fenv'] = fenvh_parts[mask_parts]
         parts['halo_shear'] = shearh_parts[mask_parts]
 
-        print(
-            'are there any negative particle values? ',
-            np.sum(parts['downsample_halo'] < 0),
-            np.sum(parts['halo_mass'] < 0),
-        )
-        print('outputting new particle file ')
+        is_negative_particle = (np.sum(parts['downsample_halo'] < 0), np.sum(parts['halo_mass'] < 0))
+        logger.info(f"are there any negative particle values? {is_negative_particle}")
+        logger.info("outputting new particle file ")
         # output_dir = savedir+'/particles_xcom_'+str(i)+'_seed'+str(newseed)+'_abacushodMT_new.h5'
         if os.path.exists(outfilename_particles):
             os.remove(outfilename_particles)
@@ -886,15 +945,16 @@ def prepare_slab(
         newfile.create_dataset('particles', data=parts)
         newfile.close()
 
-        print(
-            'pre process particle number ',
-            len_old,
-            ' post process particle number ',
-            len(parts),
-        )
+        logger.info(f"pre process particle number {len_old}, post process particle number {len(parts)}")
+    
+    time_slab = time.time()-start
+    readable_time = time.strftime("%M:%S", time.gmtime(time_slab))
+    logger.info(f"time taken for slab {i} is {readable_time}")
 
 
 def calc_shearmark(simdir, simname, z_mock, N_dim, R, fn, partdown=100):
+    # Setup a logger
+    logger = logging.getLogger('prepare_sim')
     start = time.time()
 
     fns = glob.glob(
@@ -939,7 +999,7 @@ def calc_shearmark(simdir, simname, z_mock, N_dim, R, fn, partdown=100):
         ]
 
     pos_parts = np.concatenate(partpos)
-    print('compiled all particles', len(pos_parts), 'took time', time.time() - start)
+    logger.info(f"Compiled all particles ({len(pos_parts)}) in {time.time() - start} seconds")
 
     start = time.time()
     cat = CompaSOHaloCatalog(
@@ -950,19 +1010,21 @@ def calc_shearmark(simdir, simname, z_mock, N_dim, R, fn, partdown=100):
     header = cat.header
     Lbox = header['BoxSizeHMpc']
     Lbox / N_dim
-    print('compiled all halos', 'took time', time.time() - start)
+    logger.info(f"Compiled all halos in {time.time() - start} seconds")
 
     start = time.time()
     # dens = np.zeros((N_dim, N_dim, N_dim))
     # numba_tsc_3D(pos_parts, dens, Lbox)
     dens = tsc_parallel(pos_parts, N_dim, Lbox)
-    print('finished TSC, took time', time.time() - start)
+    logger.info(f"Finished TSC in {time.time() - start} seconds")
+    
     start = time.time()
     dens_smooth = smooth_density(dens, R, N_dim, Lbox)
-    print('finished smoothing, took time', time.time() - start)
+    logger.info(f"Finished smoothing in {time.time() - start} seconds")
+    
     start = time.time()
     shearmark = get_shear(dens_smooth, N_dim, Lbox)
-    print('finished shear mark, took time', time.time() - start)
+    logger.info(f"Finished shear mark in {time.time() - start} seconds")
 
     # output file
     np.save(fn + '.npy', shearmark)
@@ -978,7 +1040,10 @@ def main(
     halo_lc=False,
     overwrite=1,
 ):
-    print('compiling compaso halo catalogs into subsampled catalogs')
+    # Setup a logger
+    logger = logging.getLogger('prepare_sim')
+    
+    logger.info("compiling compaso halo catalogs into subsampled catalogs")
 
     config = yaml.safe_load(open(path2config))
     # update params if needed
@@ -1081,16 +1146,19 @@ def main(
         if os.path.exists(shear_fn + '.npy'):
             shearmark = np.load(shear_fn + '.npy')
         else:
-            print('computing shear field')
+            logger.info('computing shear field')
             shearmark = calc_shearmark(
                 simdir, simname, z_mock, Ndim, Rsm, shear_fn, partdown
             )
     else:
         shearmark = None
+        
     # N_dim = config['HOD_params']['Ndim']
     nthread = int(
         np.floor(multiprocessing.cpu_count() / config['prepare_sim']['Nparallel_load'])
     )
+    
+    logger.info(f"Starting to process {numslabs} slabs with {config['prepare_sim']['Nparallel_load']} parallel processes.")
 
     p = multiprocessing.Pool(config['prepare_sim']['Nparallel_load'])
     p.starmap(
