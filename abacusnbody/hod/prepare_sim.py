@@ -375,6 +375,39 @@ def do_Menv_from_tree(
     Menv[mmask] = calc_Menv(allmasses, inner_arr, inner_starts, outer_arr, outer_starts)
     return Menv
 
+def completeness_check(numslabs:float, savedir:str, newseed:float, want_ranks:bool):
+    """
+    Checks if all the slabs have been processed successfully.
+
+    Parameters
+    ----------
+    numslabs : float
+        The number of slabs to check.
+    savedir : str
+        The directory where the files are saved.
+    newseed : float
+        The seed used for the random number generator.
+    want_ranks : bool
+        Whether the ranks are wanted or not (the particles file will have a different name if ranks are wanted).
+    """
+    # Setup a logger
+    logger = logging.getLogger('prepare_sim')
+    
+    # Check the failed slabs (i.e. the files that are not in the savedir)
+    failed_slabs = []
+    for i in range(numslabs):
+        outfilename_halos = savedir+'/halos_xcom_'+str(i)+'_seed'+str(newseed)+'_abacushod_oldfenv_new.h5'
+        outfilename_particles = savedir+'/particles_xcom_'+str(i)+'_seed'+str(newseed)+'_abacushod_oldfenv_new.h5'
+        if want_ranks:
+            outfilename_particles = savedir+'/particles_xcom_'+str(i)+'_seed'+str(newseed)+'_abacushod_oldfenv_withranks_new.h5'
+        if not os.path.exists(outfilename_halos) or not os.path.exists(outfilename_particles):
+            failed_slabs.append(i)
+    
+    if len(failed_slabs) > 0:
+        logger.info(f"Failed to process slabs {failed_slabs}.")
+    else:
+        logger.info("All slabs processed successfully.")
+
 
 def prepare_slab(
     i,
@@ -1195,6 +1228,11 @@ def main(
                                    maxtasksperchild=1) as p:
         p.starmap(prepare_slab, zip_args)
 
+    # Resetting the logger with append mode should avoid overwriting the log file (bug due to multiprocessing)
+    setup_logger(filename=path2log, filemode='a') 
+    
+    completeness_check(numslabs, savedir, newseed, want_ranks)
+    
     # print("done, took time ", time.time() - start)
 
 
