@@ -1204,6 +1204,8 @@ if __name__ == '__main__':
         '--path2config', help='Path to the config file', default=DEFAULTS['path2config']
     )
     parser.add_argument(
+        '--path2log', help='Path to the log file (stdout if not provided)', default=None)
+    parser.add_argument(
         '--alt_simname',
         help='alternative simname to process, like "AbacusSummit_base_c000_ph003"',
     )
@@ -1222,6 +1224,12 @@ if __name__ == '__main__':
         '--overwrite', help='overwrite existing subsamples', default=1, type=int
     )
     args = vars(parser.parse_args())
+    
+    # Recommended : set the log in a file to avoid handling a stdout output.
+    path2log = args['path2log']
+    setup_logger(filename=path2log)
+    logger = logging.getLogger('prepare_sim') # This is the logger we will use in the prepare_sim function
+    
     main(**args)
 
-    print('done')
+    logger.info("done")
