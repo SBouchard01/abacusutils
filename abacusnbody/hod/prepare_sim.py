@@ -952,6 +952,9 @@ def prepare_slab(
             
             end_loop = time.time()
             loop_time = end_loop - start_loop if j > 0 else 0
+            
+        # Remove progress file after completion
+        os.remove(savedir + f'/slab_progress/slab_{i}.txt')
 
     halos['npstartA'] = halos_pstart_new
     halos['npoutA'] = halos_pnum_new
