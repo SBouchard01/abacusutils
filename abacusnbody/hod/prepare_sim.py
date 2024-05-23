@@ -405,8 +405,11 @@ def completeness_check(numslabs:float, savedir:str, newseed:float, want_ranks:bo
     
     if len(failed_slabs) > 0:
         logger.info(f"Failed to process slabs {failed_slabs}.")
+        logger.warning(f"Progress folder not removed at {savedir}/slab_progress")
     else:
         logger.info("All slabs processed successfully.")
+        # Cleanup
+        os.rmdir(savedir + '/slab_progress') # Remove the directory if it's empty (otherwise it will raise an error)
 
 
 def prepare_slab(
@@ -427,6 +430,7 @@ def prepare_slab(
     halo_lc=False,
     nthread=1,
     overwrite=1,
+    verbose = 1,
     mcut=1e11,
     rad_outer=10,
 ):
@@ -767,9 +771,32 @@ def prepare_slab(
 
         logger.info("compiling particle subsamples")
         start_tracker = 0
+        start_time = time.time() # Start the timer 
+        loop_time = 0 # Initialize the loop time
         for j in np.arange(len(halos)):
-            if j % 10000 == 0:
-                print('halo id', j, end='\r')
+            start_loop = time.time()
+            elapsed_time = time.time() - start_time
+            if j % 10000 == 0 and verbose : # Modulo 10000 to avoid too many writes
+                # Progress bar
+                progress = j/len(halos)*100
+                length = 100
+                progress_bar = '█'*int(progress/100*length) + ' '*(length-int(progress/100*length))
+                
+                # Times to display in the progress bar
+                time_format = "%H:%M:%S" if elapsed_time > 60*60 else "%M:%S"
+                elapsed_time_display = time.strftime(time_format, time.gmtime(elapsed_time)) 
+                estimated_time = elapsed_time * (len(halos) / (j + 1) - 1) # Estimated time remaining
+                time_format = "%H:%M:%S" if estimated_time > 60*60 else "%M:%S"
+                estimated_time_display = time.strftime(time_format, time.gmtime(estimated_time)) if loop_time > 0 else '?'
+                
+                # Iterations per second
+                it_s = f'{1/loop_time:.2f}' if loop_time > 0 else '?'
+                
+                # Write the progress in the file
+                with open(savedir + f'/slab_progress/slab_{i}.txt', 'w') as progress_file:
+                    progress_file.write(f'Slab {i}:    {progress:.0f}%|{progress_bar}| {j}/{len(halos)} [{elapsed_time_display}<{estimated_time_display}], {it_s}it/s')
+                # print("halo id", j, end = '\r')
+            
             if mask_halos[j] and halos['npoutA'][j] > 0:
                 # subsample_factor = subsample_particles(halos['N'][j] * Mpart, halos['npoutA'][j], MT)
                 # submask = np.random.binomial(n = 1, p = subsample_factor, size = halos_pnum[j])
@@ -922,6 +949,9 @@ def prepare_slab(
             else:
                 halos_pstart_new[j] = -1
                 halos_pnum_new[j] = -1
+            
+            end_loop = time.time()
+            loop_time = end_loop - start_loop if j > 0 else 0
 
     halos['npstartA'] = halos_pstart_new
     halos['npoutA'] = halos_pnum_new
@@ -1073,6 +1103,7 @@ def main(
     newseed=600,
     halo_lc=False,
     overwrite=1,
+    verbose = 1,
 ):
     # Setup a logger
     logger = logging.getLogger('prepare_sim')
@@ -1156,6 +1187,7 @@ def main(
     numslabs = len(halo_info_fns)
 
     os.makedirs(savedir, exist_ok=True)
+    os.makedirs(savedir + '/slab_progress', exist_ok=True) # create the directory for slab progress
 
     if numslabs == 0:
         raise ValueError('prepare_sim could not find any slabs!')
@@ -1212,6 +1244,7 @@ def main(
             repeat(halo_lc),
             repeat(nthread),
             repeat(overwrite),
+            repeat(verbose),
         )
 
     # p = multiprocessing.Pool(config['prepare_sim']['Nparallel_load'])
@@ -1269,6 +1302,9 @@ if __name__ == '__main__':
     )
     parser.add_argument(
         '--overwrite', help='overwrite existing subsamples', default=1, type=int
+    )
+    parser.add_argument(
+        '--verbose', help='Print progress of slabs in temporary files', default = 1, type=int
     )
     args = vars(parser.parse_args())
     
