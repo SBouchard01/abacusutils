@@ -375,7 +375,7 @@ def do_Menv_from_tree(
     Menv[mmask] = calc_Menv(allmasses, inner_arr, inner_starts, outer_arr, outer_starts)
     return Menv
 
-def completeness_check(numslabs:float, savedir:str, newseed:float, want_ranks:bool):
+def completeness_check(numslabs:float, savedir:str, newseed:float, want_ranks:bool, MT:bool):
     """
     Checks if all the slabs have been processed successfully.
 
@@ -389,6 +389,8 @@ def completeness_check(numslabs:float, savedir:str, newseed:float, want_ranks:bo
         The seed used for the random number generator.
     want_ranks : bool
         Whether the ranks are wanted or not (the particles file will have a different name if ranks are wanted).
+    MT : bool
+        Whether the multi-tracer is used or not.
     """
     # Setup a logger
     logger = logging.getLogger('prepare_sim')
@@ -396,10 +398,15 @@ def completeness_check(numslabs:float, savedir:str, newseed:float, want_ranks:bo
     # Check the failed slabs (i.e. the files that are not in the savedir)
     failed_slabs = []
     for i in range(numslabs):
-        outfilename_halos = savedir+'/halos_xcom_'+str(i)+'_seed'+str(newseed)+'_abacushod_oldfenv_new.h5'
-        outfilename_particles = savedir+'/particles_xcom_'+str(i)+'_seed'+str(newseed)+'_abacushod_oldfenv_new.h5'
+        outfilename_halos = savedir+'/halos_xcom_'+str(i)+'_seed'+str(newseed)+'_abacushod_oldfenv'
+        outfilename_particles = savedir+'/particles_xcom_'+str(i)+'_seed'+str(newseed)+'_abacushod_oldfenv'
+        if MT:
+            outfilename_halos += '_MT'
+            outfilename_particles += '_MT'
         if want_ranks:
-            outfilename_particles = savedir+'/particles_xcom_'+str(i)+'_seed'+str(newseed)+'_abacushod_oldfenv_withranks_new.h5'
+            outfilename_particles += '_withranks'
+        outfilename_particles += '_new.h5'
+        outfilename_halos += '_new.h5'
         if not os.path.exists(outfilename_halos) or not os.path.exists(outfilename_particles):
             failed_slabs.append(i)
     
@@ -1267,7 +1274,7 @@ def main(
     # Resetting the logger with append mode should avoid overwriting the log file (bug due to multiprocessing)
     setup_logger(filename=path2log, filemode='a') 
     
-    completeness_check(numslabs, savedir, newseed, want_ranks)
+    completeness_check(numslabs, savedir, newseed, want_ranks, MT)
     
     # print("done, took time ", time.time() - start)
 
@@ -1287,7 +1294,8 @@ if __name__ == '__main__':
         '--path2config', help='Path to the config file', default=DEFAULTS['path2config']
     )
     parser.add_argument(
-        '--path2log', help='Path to the log file (stdout if not provided)', default=None)
+        '--path2log', help='Path to the log file (stdout if not provided)', default=None
+    )
     parser.add_argument(
         '--alt_simname',
         help='alternative simname to process, like "AbacusSummit_base_c000_ph003"',
