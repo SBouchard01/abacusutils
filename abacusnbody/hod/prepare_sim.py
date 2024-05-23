@@ -735,7 +735,7 @@ def prepare_slab(
                     new_shear_rank = halo_shears.argsort().argsort()
                     shear_rank[mmask] = new_shear_rank / np.max(new_shear_rank) - 0.5
         halos['shear_rank'] = shear_rank
-        print('finished shear compute')
+        logger.info('finished shear compute')
     else:
         halos['shear_rank'] = np.zeros(len(halos))
 
